@@ -1,0 +1,2 @@
+bill_id,customer_id,billing_date,base_monthly_charge,long_distance_charge,extra_data_charge,discount_amount,total_amount,payment_method,payment_status,created_at,updated_at
+BTEST-RECOVERY-001,7495-OOKFY,2026-01-01,80.65,51.26,0.0,10.0,121.91,Credit Card,Paid,2026-01-03,

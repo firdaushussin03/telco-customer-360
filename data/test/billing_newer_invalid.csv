@@ -1,0 +1,2 @@
+bill_id,customer_id,billing_date,base_monthly_charge,long_distance_charge,extra_data_charge,discount_amount,total_amount,payment_method,payment_status,created_at,updated_at
+B202601-0420-BWTPW,0420-BWTPW,2026-01-01,25.5,0.0,0.0,0.0,25.5,Mailed Check,Paid,2026-01-01,

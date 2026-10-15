@@ -1,0 +1,41 @@
+
+# ============================================================
+# TELCO CUSTOMER 360 - GITIGNORE
+# ============================================================
+
+# Python virtual environment
+.venv/
+venv/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Local backup files
+/backup file/
+
+# Generated logs
+/logs/
+*.log
+
+# Processed output data
+/data/processed/
+
+# Original IBM Telco datasets
+# Excluded until redistribution terms are verified
+/data/raw/Telco_customer_churn_*.xlsx
+
+# Temporary Excel ingestion test dataset
+/data/raw/billing_transactions_excel_test.csv
+
+# Editor and operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

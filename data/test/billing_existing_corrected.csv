@@ -1,0 +1,2 @@
+bill_id,customer_id,billing_date,base_monthly_charge,long_distance_charge,extra_data_charge,discount_amount,total_amount,payment_method,payment_status,created_at,updated_at
+B202601-0215-BQKGS,0215-BQKGS,2026-01-01,84.3,22.15,10.0,10.0,106.45,Credit Card,Paid,2026-01-01,2026-03-02
