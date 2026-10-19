@@ -1,5 +1,6 @@
 import pandas as pd
 import re
+import os
 from pathlib import Path
 from getpass import getpass
 
@@ -29,10 +30,10 @@ BILLING_SOURCE_FILE = (
     / "billing_transactions.csv"
 )
 
-DB_HOST = "localhost"
-DB_PORT = 5432
-DB_NAME = "telco_project"
-DB_USER = "postgres"
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = int(os.getenv("DB_PORT", "5432"))
+DB_NAME = os.getenv("DB_NAME", "telco_project")
+DB_USER = os.getenv("DB_USER", "postgres")
 
 PIPELINE_NAME = "telco_customer_360"
 BILLING_SOURCE_NAME = "billing_transactions"
@@ -43,7 +44,7 @@ BILLING_SOURCE_NAME = "billing_transactions"
 # ============================================================
 
 def get_engine():
-    password = getpass("PostgreSQL password: ")
+    password = os.getenv("DB_PASSWORD") or getpass("PostgreSQL password: ")
 
     connection_url = URL.create(
         drivername="postgresql+psycopg2",

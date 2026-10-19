@@ -1,0 +1,33 @@
+# Python virtual environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Credentials and secrets
+.env
+.env.*
+
+# Git files
+.git/
+
+# Local project data
+data/
+
+# Backup and log files
+backup file/
+logs/
+*.log
+
+# Editor configuration
+.vscode/
+.idea/
+
+# Other unnecessary files
+notebooks/
+.DS_Store
+Thumbs.db

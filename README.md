@@ -30,7 +30,7 @@ The main pipeline runs **15 sequential processing and validation steps** through
 | pandas and NumPy | Data processing and synthetic data generation |
 | SQLAlchemy and psycopg2 | Python-to-PostgreSQL connectivity |
 
-**Current scope:** A local, batch-oriented pipeline. Docker, Airflow, dbt, cloud platforms, Spark, and Kafka are potential future extensions; they are **not** part of this version.
+**Current scope:** A batch-oriented data engineering pipeline supporting both local Python/PostgreSQL execution and Docker Compose deployment. Airflow, dbt, cloud platforms, Spark, and Kafka are potential future extensions; they are not part of this version.
 
 ## Datasets
 
@@ -313,6 +313,147 @@ For the **initial Excel load** (run only after the RAW tables are created):
 
 **Fresh-install limitation:** The full SQL bootstrap order has not yet been tested from an empty database as a single automated setup. The initialization step above is therefore a manual prerequisite, not a claim that cloning the repository and running one command is sufficient. A clean-install script is a planned improvement.
 
+## Running the Project with Docker
+
+The project supports containerized execution using Docker and Docker Compose. PostgreSQL runs as a persistent database service, while the Python ETL pipeline runs as a temporary batch-processing container.
+
+### Docker Prerequisites
+
+- Docker Desktop installed and running, with Linux container support.
+- Docker Compose available.
+- The required IBM Telco Excel source files and synthetic billing CSV placed in `data/raw/`.
+- A local `.env` file containing the PostgreSQL configuration.
+
+Example `.env` configuration:
+
+```env
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=your_database_password
+POSTGRES_DB=telco_project
+```
+
+The `.env` file contains credentials and must not be committed to Git.
+
+### Docker Architecture
+
+Docker Compose defines two services:
+
+| Service | Image | Purpose |
+|---|---|---|
+| `postgres` | `postgres:17` | PostgreSQL database hosting the RAW, STAGING, CORE, MART, and audit schemas |
+| `pipeline` | `telco-customer-360-pipeline:dev` | Custom Python image containing the ETL scripts, SQL transformations, and Python dependencies |
+
+The Python image is built using the project's `Dockerfile` and `requirements.txt`.
+
+The services communicate over the Docker Compose network using the PostgreSQL hostname `postgres` and port `5432`.
+
+PostgreSQL is also accessible from Windows through `localhost:5433`, while the existing locally installed PostgreSQL instance can continue using port `5432`.
+
+### Docker Storage
+
+Two storage mechanisms are used:
+
+**PostgreSQL named volume**
+
+```yaml
+- telco_postgres_data:/var/lib/postgresql/data
+```
+
+Stores the database files persistently, allowing PostgreSQL container recreation without losing the stored database under normal volume-preserving operations.
+
+**Python source-data bind mount**
+
+```yaml
+- ./data/raw:/app/data/raw:ro
+```
+
+Provides the Python container with read-only access to the source datasets stored in the project's Windows directory.
+
+Source datasets are excluded from the Python image using `.dockerignore`. Changes to the mounted CSV can be read in subsequent pipeline runs without rebuilding the image.
+
+### Build and Execute the Pipeline
+
+From the project root, validate the Docker Compose configuration:
+
+```cmd
+docker compose config --quiet
+```
+
+Start the PostgreSQL database:
+
+```cmd
+docker compose up -d postgres
+```
+
+Build the Python application image:
+
+```cmd
+docker compose build pipeline
+```
+
+Execute the ETL pipeline:
+
+```cmd
+docker compose run --rm pipeline
+```
+
+The command creates a temporary Python container, executes `src/15_run_pipeline.py`, and removes the container after completion.
+
+The PostgreSQL container and its database volume remain independent of the temporary pipeline container.
+
+When Python or SQL source files change, rebuild the image before executing the updated pipeline:
+
+```cmd
+docker compose build pipeline
+```
+
+**Important:** The commands above assume the PostgreSQL database has already been initialized and populated. For a fresh database, the required schemas, RAW tables, audit structures, watermark, quarantine structures, and initial Excel ingestion must first be prepared using the project's existing setup scripts. This bootstrap process is not yet fully automated.
+
+### Verify Pipeline Execution
+
+Check recent pipeline execution records:
+
+```cmd
+docker compose exec postgres psql -U postgres -d telco_project -c "SELECT run_id, status, started_at, finished_at FROM audit.pipeline_run ORDER BY run_id DESC LIMIT 5;"
+```
+
+Check the recorded pipeline steps:
+
+```cmd
+docker compose exec postgres psql -U postgres -d telco_project -c "SELECT run_id, status, COUNT(*) AS total_steps FROM audit.pipeline_step GROUP BY run_id, status ORDER BY run_id, status;"
+```
+
+**Docker validation result (19 October 2026):**
+
+- Docker pipeline Run ID: `1`
+- Overall execution status: `SUCCESS`
+- Successful pipeline steps: `15/15`
+- Failed steps: `0`
+- Billing records unchanged during the incremental run: `42,258`
+
+These results were verified using the Python execution output and PostgreSQL audit tables.
+
+### Useful Docker Commands
+
+| Command | Purpose |
+|---|---|
+| `docker compose ps` | View running Compose containers |
+| `docker compose ps -a` | View existing Compose containers, including stopped ones |
+| `docker compose build pipeline` | Build or rebuild the Python image |
+| `docker compose run --rm pipeline` | Execute the batch ETL pipeline |
+| `docker compose up -d postgres` | Start PostgreSQL in the background |
+| `docker compose down` | Stop and remove Compose containers and network, preserving named volumes by default |
+| `docker image ls` | List local Docker images |
+
+**Warning:** Avoid `docker compose down -v` unless intentionally deleting the PostgreSQL named volume and its stored data.
+
+### Docker Limitations
+
+- Database bootstrap and initial Excel ingestion are not yet automated for a clean deployment.
+- The pipeline uses batch execution rather than continuous streaming.
+- Docker Compose manages the services but does not schedule recurring ETL executions.
+- Pipeline execution still depends on the existing incremental ingestion, validation, and recovery logic.
+
 ## Design Considerations and Limitations
 
 - The project is designed for local batch processing, not real-time streaming.
@@ -324,7 +465,7 @@ For the **initial Excel load** (run only after the RAW tables are created):
 
 ## Future Improvements
 
-- Containerize PostgreSQL and the Python pipeline with **Docker Compose**.
+- Automate fresh-database initialization and initial Excel-to-RAW ingestion to enable reproducible Docker deployments.
 - Add automated unit and integration tests with **pytest** and CI checks using **GitHub Actions**.
 - Orchestrate the pipeline using **Apache Airflow**.
 - Evaluate **dbt Core** for modular SQL models, documentation, and testing.
@@ -332,4 +473,4 @@ For the **initial Excel load** (run only after the RAW tables are created):
 
 ## Project Status
 
-**Current status: Local pipeline validated.** Pipeline Run 27 completed successfully with all 15 steps passing. Portfolio documentation and clean-environment reproducibility are being improved before public release.
+**Current status: Local and Dockerized pipelines validated.** The local PostgreSQL pipeline (Run 27) and Dockerized PostgreSQL pipeline (Run 1) both completed successfully, with all 15 processing and validation steps passing. Docker Compose now manages PostgreSQL and the Python ETL application. Full clean-environment database initialization remains a planned improvement.

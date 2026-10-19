@@ -1,16 +1,16 @@
 import pandas as pd
+import os
 from pathlib import Path
 from getpass import getpass
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import URL
 
-BASE_DIR = Path(
-    r"C:\Users\mohd5\Documents\telco-customer-360\data\raw"
-)
+BASE_DIR = Path(__file__).resolve().parents[1] / "data" / "raw"
 
-DB_HOST = "localhost"
-DB_PORT = "5432"
-DB_NAME = "telco_project"
-DB_USER = "postgres"
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_NAME = os.getenv("DB_NAME", "telco_project")
+DB_USER = os.getenv("DB_USER", "postgres")
 
 LOAD_CONFIG = {
     "demographics": {
@@ -105,11 +105,21 @@ LOAD_CONFIG = {
     },
 }
 
+
 def get_engine():
     password = getpass("PostgreSQL password: ")
-    return create_engine(
-        f"postgresql+psycopg2://{DB_USER}:{password}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+
+    connection_url = URL.create(
+        drivername="postgresql+psycopg2",
+        username=DB_USER,
+        password=password,
+        host=DB_HOST,
+        port=int(DB_PORT),
+        database=DB_NAME,
     )
+
+    return create_engine(connection_url)
+
 
 def get_table_count(engine, table_name):
     with engine.connect() as connection:

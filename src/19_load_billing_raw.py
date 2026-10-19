@@ -1,4 +1,5 @@
 import pandas as pd
+import os
 from pathlib import Path
 from getpass import getpass
 
@@ -20,9 +21,7 @@ from sqlalchemy import URL, create_engine, text
 # ============================================================
 
 
-PROJECT_ROOT = Path(
-    r"C:\Users\mohd5\Documents\telco-customer-360"
-)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 SOURCE_FILE = (
     PROJECT_ROOT
@@ -31,10 +30,10 @@ SOURCE_FILE = (
     / "billing_transactions.csv"
 )
 
-DB_HOST = "localhost"
-DB_PORT = 5432
-DB_NAME = "telco_project"
-DB_USER = "postgres"
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = int(os.getenv("DB_PORT", "5432"))
+DB_NAME = os.getenv("DB_NAME", "telco_project")
+DB_USER = os.getenv("DB_USER", "postgres")
 
 PIPELINE_NAME = "telco_customer_360"
 SOURCE_NAME = "billing_transactions"
