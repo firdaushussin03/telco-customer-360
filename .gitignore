@@ -39,3 +39,10 @@ __pycache__/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local Docker bootstrap testing configurations
+/compose.bootstrap-test.yaml
+/compose.bootstrap-fulltest.yaml
+
+# Local database connection diagnostic script
+/src/00_test_db_connection.py
