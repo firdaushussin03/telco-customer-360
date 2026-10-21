@@ -107,7 +107,7 @@ LOAD_CONFIG = {
 
 
 def get_engine():
-    password = getpass("PostgreSQL password: ")
+    password = os.getenv("DB_PASSWORD") or getpass("PostgreSQL password: ")
 
     connection_url = URL.create(
         drivername="postgresql+psycopg2",
@@ -121,13 +121,12 @@ def get_engine():
     return create_engine(connection_url)
 
 
-def get_table_count(engine, table_name):
-    with engine.connect() as connection:
-        return connection.execute(
-            text(f"SELECT COUNT(*) FROM raw.{table_name}")
-        ).scalar_one()
+def get_table_count(connection, table_name):
+    return connection.execute(
+        text(f"SELECT COUNT(*) FROM raw.{table_name}")
+    ).scalar_one()
 
-def load_table(engine, table_name, config):
+def load_table(connection, table_name, config):
     file_path = BASE_DIR / config["file"]
 
     print("\n" + "=" * 70)
@@ -137,7 +136,7 @@ def load_table(engine, table_name, config):
     if not file_path.exists():
         raise FileNotFoundError(f"Source file not found: {file_path}")
 
-    existing_rows = get_table_count(engine, table_name)
+    existing_rows = get_table_count(connection, table_name)
 
     if existing_rows > 0:
         raise RuntimeError(
@@ -151,7 +150,7 @@ def load_table(engine, table_name, config):
 
     df.to_sql(
         name=table_name,
-        con=engine,
+        con=connection,
         schema="raw",
         if_exists="append",
         index=False,
@@ -159,7 +158,7 @@ def load_table(engine, table_name, config):
         method="multi",
     )
 
-    loaded_rows = get_table_count(engine, table_name)
+    loaded_rows = get_table_count(connection, table_name)
 
     print(f"Source rows: {len(df)}")
     print(f"Database rows: {loaded_rows}")
@@ -170,17 +169,36 @@ def load_table(engine, table_name, config):
         )
 
     print("Load validation successful.")
+    
+def validate_source_files():
+    missing_files = []
+
+    for config in LOAD_CONFIG.values():
+        file_path = BASE_DIR / config["file"]
+
+        if not file_path.is_file():
+            missing_files.append(str(file_path))
+
+    if missing_files:
+        raise FileNotFoundError(
+            "Missing Excel source files:\n"
+            + "\n".join(missing_files)
+        )
+
+    print("All five Excel source files found.")
 
 def main():
+    validate_source_files()
+
     engine = get_engine()
 
-    with engine.connect() as connection:
+    with engine.begin() as connection:
+
         connection.execute(text("SELECT 1"))
+        print("Database connection successful.")
 
-    print("Database connection successful.")
-
-    for table_name, config in LOAD_CONFIG.items():
-        load_table(engine, table_name, config)
+        for table_name, config in LOAD_CONFIG.items():
+            load_table(connection, table_name, config)
 
     print("\nALL RAW TABLES LOADED SUCCESSFULLY")
 
