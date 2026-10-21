@@ -1,5 +1,5 @@
 -- ============================================================
--- TELCO CUSTOMER 360 - MART VALIDATION
+-- TELCO CUSTOMER 360 - PIPELINE AUDIT INITIALIZATION
 -- File: 14_create_pipeline_audit.sql
 -- ============================================================
 

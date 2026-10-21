@@ -16,8 +16,40 @@ services:
     volumes:
       - telco_postgres_data:/var/lib/postgresql/data
 
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
-  # Service 2: Python ETL Pipeline
+  # Service 2: Database Initialization
+  init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    image: telco-customer-360-pipeline:dev
+
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+
+    volumes:
+      - ./data/raw:/app/data/raw:ro
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    command:
+      - python
+      - src/58_initialize_if_needed.py
+
+
+  # Service 3: Python ETL Pipeline
   pipeline:
     build:
       context: .
@@ -36,7 +68,13 @@ services:
       - ./data/raw:/app/data/raw:ro
 
     depends_on:
-      - postgres
+      init:
+        condition: service_completed_successfully
+
+    command:
+      - sh
+      - -c
+      - python src/58_initialize_if_needed.py && exec python src/15_run_pipeline.py
 
 
 # Named volumes
