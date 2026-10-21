@@ -8,7 +8,7 @@ The project combines five IBM Telco Customer Churn datasets—demographics, loca
 
 Python handles source ingestion and coordinates SQL transformations. PostgreSQL stores the data across **RAW**, **STAGING**, **CORE**, and **MART** schemas. An additional **AUDIT** schema tracks pipeline execution, incremental checkpoints, and quarantined billing records.
 
-The main pipeline runs **15 sequential processing and validation steps** through `src/15_run_pipeline.py`. The initial Excel-to-RAW load is performed separately.
+Through Docker Compose, the project supports automated database initialization and execution of the ETL pipeline. The initialization coordinator (`src/58_initialize_if_needed.py`) detects whether the PostgreSQL database is fresh or already initialized. For a fresh database, it executes the database bootstrap (`src/57_bootstrap_database.py`) and initial Excel ingestion (`src/03_load_raw_data.py`). For an existing database, it verifies the required structures and initial RAW data before the main pipeline (`src/15_run_pipeline.py`) executes its **15 sequential processing and validation steps**.
 
 ## Project Objectives
 
@@ -29,6 +29,7 @@ The main pipeline runs **15 sequential processing and validation steps** through
 | SQL | Transformations, validations, analytical marts, and UPSERT logic |
 | pandas and NumPy | Data processing and synthetic data generation |
 | SQLAlchemy and psycopg2 | Python-to-PostgreSQL connectivity |
+| Docker and Docker Compose | Containerization, PostgreSQL healthchecks, automated database initialization, and ETL service orchestration |
 
 **Current scope:** A batch-oriented data engineering pipeline supporting both local Python/PostgreSQL execution and Docker Compose deployment. Airflow, dbt, cloud platforms, Spark, and Kafka are potential future extensions; they are not part of this version.
 
@@ -45,9 +46,42 @@ The main pipeline runs **15 sequential processing and validation steps** through
 
 The five customer datasets originate from the **IBM Telco Customer Churn** sample data. The billing dataset was generated for this project using `src/16_generate_billing_data.py`.
 
-**Data publication note:** The original IBM Excel files are excluded from the proposed public repository until their redistribution terms are confirmed. Users should obtain the source datasets from an authorized source and place them in `data/raw/` using the filenames listed below.
+**Data publication note:** The original IBM Excel files are excluded from the public repository until their redistribution terms are confirmed. Users should obtain the source datasets from an authorized source and place them in `data/raw/` using the filenames listed below.
 
 ## Architecture
+
+### Docker Compose Initialization and Execution
+
+Docker Compose coordinates three services: **`postgres`**, **`init`**, and **`pipeline`**. The `init` service waits for PostgreSQL to pass its healthcheck; the `pipeline` service waits for `init` to complete successfully. On a fresh database, `init` runs the coordinator (`src/58_initialize_if_needed.py`), which invokes the schema/table bootstrap (`src/57_bootstrap_database.py`) and initial Excel ingestion (`src/03_load_raw_data.py`). On an already initialized database, the coordinator verifies its expected state instead.
+
+Compose may reuse a previously successful `init` container. Therefore the pipeline container **also runs script 58 before every execution of script 15**. The precheck can initialize a fresh database if needed, or stop on an incomplete one.
+
+```mermaid
+flowchart TD
+    A["Run: docker compose run --rm pipeline"] --> B["PostgreSQL starts / becomes healthy"]
+    B --> C["Compose satisfies init dependency"]
+    C --> D{"Init already completed successfully?"}
+    D -->|No| E["Init service: Script 58"]
+    E --> F{"Database state?"}
+    F -->|Fresh| G["Script 57: Create schemas and tables"]
+    G --> H["Script 03: Load five Excel datasets"]
+    F -->|Initialized| I["Verify existing database"]
+    F -->|Incomplete| X["Stop with an error"]
+    H --> J["Init dependency satisfied"]
+    I --> J
+    D -->|Yes| J
+    J --> K["Pipeline container: Run script 58 again"]
+    K --> L{"Database state?"}
+    L -->|Fresh| N["Bootstrap and initial Excel ingestion"]
+    L -->|Initialized| M["Verify required structures and RAW data"]
+    L -->|Incomplete| X
+    N --> O["Script 15: Execute 15 ETL steps"]
+    M --> O
+```
+
+**Note:** The `init` service and the pipeline's precheck use the same coordinator. On a normal first run, the initialization happens in `init`, while the second check only verifies the result. An exited `init` dependency does not imply that it is rerun for every pipeline invocation.
+
+### Data Warehouse Architecture
 
 ```mermaid
 flowchart TD
@@ -161,7 +195,9 @@ The recovery exercises checked RAW history, latest-version selection in STAGING,
 
 ## Validation Results
 
-The final verified execution was **Pipeline Run 27**.
+Validation results below refer to **separate local and Docker PostgreSQL databases**. Their RAW counts may differ because of historical billing versions and prior recovery tests.
+
+### Local PostgreSQL Validation — Run 27
 
 | Check | Verified result |
 |---|---|
@@ -178,7 +214,23 @@ The final verified execution was **Pipeline Run 27**.
 | Quarantine test cases 4, 5, 6 | RESOLVED |
 | Final billing watermark | `2026-06-07 00:00:00` |
 
-The difference between RAW (42,261 rows) and STAGING/CORE (42,258 rows) is explained by **three additional historical versions** of existing bills retained in RAW. The row counts describe the **tested Run 27 database state**; a fresh database may initially have only one version per bill until updates are ingested.
+The difference between RAW (42,261 rows) and STAGING/CORE (42,258 rows) is explained by **three additional historical versions** of existing bills retained in RAW. This is the documented local Run 27 state; it is not the expected RAW count for every fresh installation.
+
+### Docker Compose Validation — Phase 4
+
+| Test | Verified result |
+|---|---|
+| Fresh database bootstrap | Five project schemas created and nine SQL initialization scripts executed |
+| Initial Excel source ingestion | 29,843 RAW rows across five tables |
+| Fresh end-to-end Docker test | 15 of 15 ETL steps successful (Run ID 1) |
+| Billing records on first fresh run | 42,258 inserted into CORE |
+| Main Docker database pipeline rerun | 15 of 15 ETL steps successful (Run ID 3) |
+| Billing results on main Docker rerun | 0 inserted / 0 updated / 42,258 unchanged |
+| Main Docker billing watermark | `2026-06-07 00:00:00` |
+| Repeated initialization | Existing database detected; initial Excel ingestion skipped |
+| Container recreation check | Existing billing data and watermark preserved with the named volume |
+
+These Docker results were observed during local testing. The main Docker database and the isolated fresh-install test use different volumes; they should not be confused with the separate local PostgreSQL Run 27 environment.
 
 ### Example Verification Queries
 
@@ -204,32 +256,42 @@ LIMIT 5;
 
 ```text
 telco-customer-360/
-├── src/                  # Python ingestion, pipeline, and recovery-test scripts
-├── sql/                  # Schema creation, transformation, validation, and recovery SQL
+├── compose.yaml            # PostgreSQL, init, and ETL pipeline services
+├── Dockerfile              # Python application image
+├── .dockerignore           # Excludes unnecessary build-context files
+├── src/                    # Python ingestion, initialization, pipeline, and recovery tests
+│   ├── 03_load_raw_data.py
+│   ├── 15_run_pipeline.py
+│   ├── 16_generate_billing_data.py
+│   ├── 57_bootstrap_database.py
+│   └── 58_initialize_if_needed.py
+├── sql/                    # Schema creation, transformation, validation, and recovery SQL
 ├── data/
-│   ├── raw/              # Source Excel files (excluded from Git) and synthetic billing CSV
-│   ├── test/             # Synthetic billing recovery test CSV files
-│   └── processed/        # Reserved for generated outputs
-├── notebooks/            # Reserved for exploratory notebooks
-├── logs/                 # Local generated logs (excluded from Git)
-├── requirements.txt      # Python dependencies
-├── .gitignore            # Version-control exclusions
-└── README.md             # Project documentation
+│   ├── raw/                # Source Excel datasets and synthetic billing CSV
+│   ├── test/               # Synthetic billing recovery test CSV files
+│   └── processed/          # Reserved for generated outputs
+├── notebooks/              # Reserved for exploratory notebooks
+├── logs/                   # Local generated logs (excluded from Git)
+├── requirements.txt        # Python dependencies
+├── .gitignore              # Version-control exclusions
+└── README.md               # Project documentation
 ```
 
-Local folders such as `.venv/` and `backup file/` are intentionally excluded from the proposed public repository.
+The diagram summarizes the main project files and directories; not every file is shown. Local folders such as `.venv/` and `backup file/` are excluded from Git. The local Docker bootstrap test Compose files and diagnostic script are also excluded from Git.
 
 ### Important Python Files
 
 | File | Purpose |
 |---|---|
 | `src/01_data_understanding.py` | Explore source data |
-| `src/03_load_raw_data.py` | Initial Excel-to-RAW ingestion |
+| `src/03_load_raw_data.py` | Initial Excel-to-RAW ingestion with source preflight and transaction handling |
 | `src/15_run_pipeline.py` | Main 15-step pipeline |
 | `src/16_generate_billing_data.py` | Generate synthetic billing data |
 | `src/19_load_billing_raw.py` | Standalone incremental billing loader |
 | `src/23_simulate_billing_update.py` | Simulate a billing status change |
 | `src/34_*.py` through `src/52_*.py` | Quarantine, recovery, and controlled test scenarios |
+| `src/57_bootstrap_database.py` | Create required schemas and tables in a fresh PostgreSQL database |
+| `src/58_initialize_if_needed.py` | Detect database state, initialize if fresh, and verify existing setup |
 
 ### Important SQL Files
 
@@ -256,15 +318,16 @@ Other SQL files contain validations, standalone loading logic, and recovery exer
 
 ## Running the Project Locally
 
+Local Python execution is supported as an alternative to Docker. The Docker workflow below is the recommended path for testing the full automated initialization sequence.
+
 ### Prerequisites
 
-- Python and a working virtual environment (the development environment used Python 3.14).
+- Python and a working virtual environment (development used Python 3.14).
 - PostgreSQL running locally, with a database named `telco_project`.
-- Access to the five IBM Telco Excel source files.
+- Access to the five IBM Telco Excel source files and the synthetic billing CSV.
 - Python dependencies from `requirements.txt`.
-- Database schemas and supporting tables initialized using the repository's SQL setup scripts.
 
-The current Python scripts connect to PostgreSQL at `localhost:5432` using the `postgres` user and prompt for the database password. Adjust the connection settings in the scripts if your local environment differs.
+Local scripts may use application-specific connection settings or environment variables. Script 57 and script 58 require `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`. Script 03 accepts `DB_PASSWORD` from the environment or prompts for it. For local PostgreSQL development, the tested server used `localhost:5432`.
 
 ### Install Python Dependencies (Windows Command Prompt)
 
@@ -278,7 +341,7 @@ python -m venv .venv
 
 ### Prepare Source Files
 
-Place the following source files in `data/raw/`:
+Place the following files in `data/raw/`:
 
 ```text
 Telco_customer_churn_demographics.xlsx
@@ -289,42 +352,39 @@ Telco_customer_churn_status.xlsx
 billing_transactions.csv
 ```
 
-The billing CSV is synthetic and can be generated using `src/16_generate_billing_data.py` once the necessary customer data is available. **Do not regenerate or overwrite the billing CSV in an existing tested environment without backing it up first.**
+The original IBM Excel files are not committed to this repository. The billing CSV is synthetic and can be generated using `src/16_generate_billing_data.py` once the necessary customer data is available. **Do not regenerate or overwrite a billing CSV in an existing tested environment without backing it up first.**
 
 ### Initialize and Run
 
-1. Create the `telco_project` database in PostgreSQL.
-2. Initialize the required schemas, tables, watermark, quarantine, and audit structures using the SQL scripts in `sql/`.
-3. Load the five Excel datasets into RAW using `src/03_load_raw_data.py`.
-4. Confirm that `data/raw/billing_transactions.csv` exists and the billing tables and watermark are initialized.
-5. Run the main pipeline.
+For a **fresh local database**, first create the empty PostgreSQL database and configure the required `DB_*` environment variables for scripts 57 and 58. Then run:
 
-For an **already initialized database**, run:
+```cmd
+.venv\Scripts\python.exe src\58_initialize_if_needed.py
+```
+
+When the database has no project schemas, script 58 runs the SQL bootstrap and initial Excel ingestion. If all project schemas exist, it performs required state checks instead; if only some exist or required data is missing, it stops rather than overwriting the database.
+
+After initialization, run the recurring ETL pipeline:
 
 ```cmd
 .venv\Scripts\python.exe src\15_run_pipeline.py
 ```
 
-For the **initial Excel load** (run only after the RAW tables are created):
-
-```cmd
-.venv\Scripts\python.exe src\03_load_raw_data.py
-```
-
-**Fresh-install limitation:** The full SQL bootstrap order has not yet been tested from an empty database as a single automated setup. The initialization step above is therefore a manual prerequisite, not a claim that cloning the repository and running one command is sufficient. A clean-install script is a planned improvement.
+This local execution sequence was not the main clean-install acceptance test; the complete automated Docker Compose workflow below was tested end to end.
 
 ## Running the Project with Docker
 
-The project supports containerized execution using Docker and Docker Compose. PostgreSQL runs as a persistent database service, while the Python ETL pipeline runs as a temporary batch-processing container.
+Docker Compose supports initialization and repeatable batch execution using three services. The PostgreSQL service persists data; the Python `init` and `pipeline` services run one-time tasks.
 
 ### Docker Prerequisites
 
 - Docker Desktop installed and running, with Linux container support.
 - Docker Compose available.
-- The required IBM Telco Excel source files and synthetic billing CSV placed in `data/raw/`.
+- All five IBM Telco Excel source files in `data/raw/`.
+- `data/raw/billing_transactions.csv` present, either supplied from a previous project run or generated with `src/16_generate_billing_data.py` after the required customer data is available.
 - A local `.env` file containing the PostgreSQL configuration.
 
-Example `.env` configuration:
+Example `.env`:
 
 ```env
 POSTGRES_USER=postgres
@@ -332,26 +392,35 @@ POSTGRES_PASSWORD=your_database_password
 POSTGRES_DB=telco_project
 ```
 
-The `.env` file contains credentials and must not be committed to Git.
+The `.env` file contains credentials and must **not** be committed to Git. The sample dataset files are not automatically downloaded by Docker Compose.
 
 ### Docker Architecture
 
-Docker Compose defines two services:
-
 | Service | Image | Purpose |
 |---|---|---|
-| `postgres` | `postgres:17` | PostgreSQL database hosting the RAW, STAGING, CORE, MART, and audit schemas |
-| `pipeline` | `telco-customer-360-pipeline:dev` | Custom Python image containing the ETL scripts, SQL transformations, and Python dependencies |
+| `postgres` | `postgres:17` | Persistent PostgreSQL server with healthcheck |
+| `init` | `telco-customer-360-pipeline:dev` | Runs `58_initialize_if_needed.py` after PostgreSQL becomes healthy |
+| `pipeline` | `telco-customer-360-pipeline:dev` | Rechecks initialization and runs the main 15-step ETL |
 
-The Python image is built using the project's `Dockerfile` and `requirements.txt`.
+Both Python services use the **same custom image**, built from `Dockerfile` and `requirements.txt`. The `init` service overrides the Dockerfile's default `CMD`; the `pipeline` service uses its Compose `command:` to run script 58 and then script 15.
 
-The services communicate over the Docker Compose network using the PostgreSQL hostname `postgres` and port `5432`.
+Compose uses these dependency conditions:
 
-PostgreSQL is also accessible from Windows through `localhost:5433`, while the existing locally installed PostgreSQL instance can continue using port `5432`.
+```yaml
+init:
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+pipeline:
+  depends_on:
+    init:
+      condition: service_completed_successfully
+```
+
+Services connect to PostgreSQL using hostname `postgres` and container port `5432`. The main Compose configuration publishes PostgreSQL to Windows at **`127.0.0.1:5433`**. A separate locally installed PostgreSQL server can continue using port `5432`.
 
 ### Docker Storage
-
-Two storage mechanisms are used:
 
 **PostgreSQL named volume**
 
@@ -359,118 +428,126 @@ Two storage mechanisms are used:
 - telco_postgres_data:/var/lib/postgresql/data
 ```
 
-Stores the database files persistently, allowing PostgreSQL container recreation without losing the stored database under normal volume-preserving operations.
+Stores PostgreSQL database files independently of the container. Normal container recreation can retain these files as long as the named volume is preserved; a volume is **not a database backup**.
 
-**Python source-data bind mount**
+**Read-only source-data bind mount**
 
 ```yaml
 - ./data/raw:/app/data/raw:ro
 ```
 
-Provides the Python container with read-only access to the source datasets stored in the project's Windows directory.
+Makes the local datasets available at `/app/data/raw` inside both Python containers. The `:ro` setting means the containers cannot modify the mounted source files. The raw datasets are not copied into the Python image; changes to the mounted CSV can be read by subsequent pipeline runs without rebuilding the image.
 
-Source datasets are excluded from the Python image using `.dockerignore`. Changes to the mounted CSV can be read in subsequent pipeline runs without rebuilding the image.
+### Build and Run (Windows Command Prompt)
 
-### Build and Execute the Pipeline
-
-From the project root, validate the Docker Compose configuration:
+From the project root, validate the configuration:
 
 ```cmd
 docker compose config --quiet
 ```
 
-Start the PostgreSQL database:
+Build the Python application image (required for a fresh clone without the local image):
 
 ```cmd
-docker compose up -d postgres
+docker compose build
 ```
 
-Build the Python application image:
-
-```cmd
-docker compose build pipeline
-```
-
-Execute the ETL pipeline:
+Execute the complete workflow:
 
 ```cmd
 docker compose run --rm pipeline
 ```
 
-The command creates a temporary Python container, executes `src/15_run_pipeline.py`, and removes the container after completion.
+**What happens:** Compose ensures PostgreSQL is healthy, satisfies the `init` dependency successfully, then starts a temporary `pipeline` container. On a fresh database the initialization coordinator creates the five schemas, sets up the required tables and audit infrastructure, and loads the five IBM Excel datasets. The pipeline container runs the coordinator once more as a precheck and then executes all 15 ETL steps.
 
-The PostgreSQL container and its database volume remain independent of the temporary pipeline container.
+After a successful first run, the same `docker compose run --rm pipeline` command can be used for subsequent batch runs. The coordinator verifies an existing database instead of reloading the five initial Excel datasets. The billing loader uses its watermark to select new or changed billing records.
 
-When Python or SQL source files change, rebuild the image before executing the updated pipeline:
+**`--rm` removes only the one-off pipeline container.** PostgreSQL remains available, its named volume remains attached, and the regular `init` dependency container may remain stopped with exit code `0`.
+
+If Python, SQL, or other files copied by the Dockerfile change, rebuild the image before running the updated code:
 
 ```cmd
 docker compose build pipeline
 ```
 
-**Important:** The commands above assume the PostgreSQL database has already been initialized and populated. For a fresh database, the required schemas, RAW tables, audit structures, watermark, quarantine structures, and initial Excel ingestion must first be prepared using the project's existing setup scripts. This bootstrap process is not yet fully automated.
+Starting PostgreSQL separately is optional, because `run pipeline` starts its required dependencies when needed:
+
+```cmd
+docker compose up -d postgres
+```
+
+### Fresh Database and Rerun Safety
+
+- **Fresh database:** Script 58 verifies the five Excel files exist, then runs `57_bootstrap_database.py` followed by `03_load_raw_data.py`.
+- **Existing database:** Script 58 checks the five schemas, 16 required tables, selected critical columns, initial customer RAW row counts, and billing watermark record.
+- **Incomplete database:** Script 58 stops with an error rather than dropping or resetting existing data.
+- **Source validation:** The preflight confirms file existence. The ingestion and ETL layers perform further checks; the preflight does not validate every column or file's contents.
+
+The bootstrap and initial Excel ingestion are separate transactions. If a failure occurs between them, automatic recovery from a partially initialized database is **not implemented**; investigate and repair the incomplete state before retrying. The checks also do not verify every possible data type, constraint, or data-quality issue. Source files must already be available in `data/raw/` for first-time execution.
 
 ### Verify Pipeline Execution
 
-Check recent pipeline execution records:
+Check recent pipeline executions:
 
 ```cmd
-docker compose exec postgres psql -U postgres -d telco_project -c "SELECT run_id, status, started_at, finished_at FROM audit.pipeline_run ORDER BY run_id DESC LIMIT 5;"
+docker compose exec -T postgres psql -U postgres -d telco_project -c "SELECT run_id, status, started_at, finished_at FROM audit.pipeline_run ORDER BY run_id DESC LIMIT 5;"
 ```
 
-Check the recorded pipeline steps:
+Check step-level audit summaries:
 
 ```cmd
-docker compose exec postgres psql -U postgres -d telco_project -c "SELECT run_id, status, COUNT(*) AS total_steps FROM audit.pipeline_step GROUP BY run_id, status ORDER BY run_id, status;"
+docker compose exec -T postgres psql -U postgres -d telco_project -c "SELECT run_id, status, COUNT(*) AS total_steps FROM audit.pipeline_step GROUP BY run_id, status ORDER BY run_id, status;"
 ```
 
-**Docker validation result (19 October 2026):**
-
-- Docker pipeline Run ID: `1`
-- Overall execution status: `SUCCESS`
-- Successful pipeline steps: `15/15`
-- Failed steps: `0`
-- Billing records unchanged during the incremental run: `42,258`
-
-These results were verified using the Python execution output and PostgreSQL audit tables.
+The commands above assume `POSTGRES_USER=postgres` and `POSTGRES_DB=telco_project`, as shown in the example `.env`. Adjust `-U` and `-d` if your values differ.
 
 ### Useful Docker Commands
 
 | Command | Purpose |
 |---|---|
-| `docker compose ps` | View running Compose containers |
-| `docker compose ps -a` | View existing Compose containers, including stopped ones |
-| `docker compose build pipeline` | Build or rebuild the Python image |
-| `docker compose run --rm pipeline` | Execute the batch ETL pipeline |
+| `docker compose config --quiet` | Validate the Compose configuration |
+| `docker compose build` | Build images for all build-enabled services |
+| `docker compose build pipeline` | Build or rebuild the shared Python image through the pipeline service |
+| `docker compose run --rm init` | Run the initialization coordinator manually |
+| `docker compose run --rm pipeline` | Run initialization checks and the 15-step ETL pipeline |
+| `docker compose ps` | View currently running Compose containers |
+| `docker compose ps -a` | Include stopped and exited Compose containers |
+| `docker compose logs init` | View the init service's logs |
 | `docker compose up -d postgres` | Start PostgreSQL in the background |
-| `docker compose down` | Stop and remove Compose containers and network, preserving named volumes by default |
+| `docker compose down` | Stop and remove Compose containers/networks while preserving named volumes by default |
 | `docker image ls` | List local Docker images |
 
-**Warning:** Avoid `docker compose down -v` unless intentionally deleting the PostgreSQL named volume and its stored data.
+**Data safety warning:** Do not use `docker compose down -v` on a database you intend to preserve. The `-v` option removes Compose-managed named volumes and can delete stored database data.
 
 ### Docker Limitations
 
-- Database bootstrap and initial Excel ingestion are not yet automated for a clean deployment.
-- The pipeline uses batch execution rather than continuous streaming.
-- Docker Compose manages the services but does not schedule recurring ETL executions.
-- Pipeline execution still depends on the existing incremental ingestion, validation, and recovery logic.
+- Execution is batch-oriented, not continuous streaming.
+- Docker Compose handles container startup order but does not schedule recurring ETL runs.
+- Automated initialization assumes the expected sample source files and counts.
+- Full automated repair after partial initialization, stronger schema checking, and production-grade secrets handling are future improvements.
 
 ## Design Considerations and Limitations
 
 - The project is designed for local batch processing, not real-time streaming.
 - The billing watermark uses a strict `updated_at > last_watermark` condition. Late-arriving or corrected records at or below the checkpoint require controlled recovery; equal-timestamp edge cases need additional design consideration in a production system.
-- Historical billing versions are retained in RAW; STAGING and CORE represent the latest known bill state rather than a full historical ledger.
+- Historical billing versions are retained in RAW; STAGING and CORE represent the latest known bill state rather than a complete historical ledger.
 - The recovery scripts demonstrate controlled exercises and are not a fully automated remediation service.
-- The main pipeline is a Python coordinator, not an Apache Airflow DAG.
-- The repository has not yet been verified with an end-to-end clean-database bootstrap.
+- Initialization verification covers specific required objects and expected initial row counts rather than exhaustive schema constraints or contents.
+- Bootstrap and Excel ingestion run in separate transactions, and partial initialization needs investigation rather than automatic destructive cleanup.
+- The project relies on the IBM Telco sample files and a synthetic billing CSV supplied or prepared locally; Docker Compose does not automatically obtain the source datasets.
+- The main pipeline is coordinated by Python, not an Apache Airflow DAG. Docker Compose does not schedule recurring jobs.
 
 ## Future Improvements
 
-- Automate fresh-database initialization and initial Excel-to-RAW ingestion to enable reproducible Docker deployments.
 - Add automated unit and integration tests with **pytest** and CI checks using **GitHub Actions**.
-- Orchestrate the pipeline using **Apache Airflow**.
+- Expand initialization checks to validate essential data types, constraints, source data contents, and a reliable completion marker.
+- Improve error recovery for interrupted or partially initialized databases and introduce stronger concurrency safeguards.
+- Orchestrate scheduled pipeline execution using **Apache Airflow**.
 - Evaluate **dbt Core** for modular SQL models, documentation, and testing.
 - Explore one cloud provider and a managed analytical platform before adding distributed processing or streaming tools.
 
 ## Project Status
 
-**Current status: Local and Dockerized pipelines validated.** The local PostgreSQL pipeline (Run 27) and Dockerized PostgreSQL pipeline (Run 1) both completed successfully, with all 15 processing and validation steps passing. Docker Compose now manages PostgreSQL and the Python ETL application. Full clean-environment database initialization remains a planned improvement.
+**Current status: Automated database initialization and Docker Compose pipeline execution validated.** The local PostgreSQL pipeline (Run 27) and multiple Dockerized runs completed all 15 processing and validation steps successfully. A fresh isolated Docker database was bootstrapped and populated through the `init` dependency, and the subsequent full ETL execution succeeded (Run ID 1). The main Docker database also passed a rerun with the additional pre-ETL initialization check (Run ID 3), with 42,258 billing records unchanged and the existing watermark preserved.
+
+The implementation has been merged into `main` (Phase 4). This is a reproducible **batch** demonstration when the required source files and Docker prerequisites are available; automated scheduling, comprehensive integrity checks, and self-healing partial initialization are not part of the current version.
