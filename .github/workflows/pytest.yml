@@ -106,6 +106,14 @@ jobs:
               -f - < "$file"
           done
 
+      - name: Create integration test environment file
+        shell: bash
+        run: |
+          # dotenv_values() in integration tests reads this file explicitly.
+          # It is generated only on this disposable GitHub runner.
+          printf 'DB_HOST=%s\nDB_PORT=%s\nDB_NAME=%s\nDB_USER=%s\nDB_PASSWORD=%s\n' \
+            "$DB_HOST" "$DB_PORT" "$DB_NAME" "$DB_USER" "$DB_PASSWORD" > .env.integration
+
       - name: Run integration tests
         run: python -m pytest integration_tests -v
 
