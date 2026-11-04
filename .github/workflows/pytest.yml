@@ -1,10 +1,7 @@
-
 # ============================================================
 # TELCO CUSTOMER 360 - GITHUB ACTIONS CI
-# File: .github/workflows/pytest.yml
-# Purpose: Run automated pytest tests on GitHub.
+# Unit tests (no database) and integration tests (PostgreSQL 17).
 # ============================================================
-
 name: Telco Customer 360 - Pytest CI
 
 on:
@@ -12,19 +9,51 @@ on:
     branches:
       - main
       - 'feature/**'
-
   pull_request:
     branches:
       - main
-
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  pytest:
+  unit-tests:
+    name: Unit tests (no database)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+          python -m pip check
+
+      - name: Run unit tests
+        run: python -m pytest tests -v
+
+  integration-tests:
+    name: Integration tests (PostgreSQL 17)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DB_HOST: '127.0.0.1'
+      DB_PORT: '5437'
+      DB_NAME: telco_test
+      DB_USER: telco_test_user
+      DB_PASSWORD: local_test_only
 
     steps:
       - name: Checkout repository
@@ -34,11 +63,56 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: '3.14'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
+          python -m pip check
 
-      - name: Run automated tests
-        run: python -m pytest -v
+      - name: Start isolated PostgreSQL
+        run: docker compose -p telco-integration-test -f compose.integration.yaml up -d --wait
+
+      - name: Initialize fresh integration database
+        shell: bash
+        run: |
+          set -euo pipefail
+          dc=(docker compose -p telco-integration-test -f compose.integration.yaml)
+
+          "${dc[@]}" exec -T postgres_test \
+            psql -U telco_test_user -d telco_test -v ON_ERROR_STOP=1 \
+            -c 'CREATE SCHEMA IF NOT EXISTS raw; CREATE SCHEMA IF NOT EXISTS staging; CREATE SCHEMA IF NOT EXISTS core; CREATE SCHEMA IF NOT EXISTS mart; CREATE SCHEMA IF NOT EXISTS audit;'
+
+          # GitHub starts with an empty database. Apply prerequisites in order.
+          for file in \
+            sql/02_create_raw_tables.sql \
+            sql/08_create_core_tables.sql \
+            sql/14_create_pipeline_audit.sql \
+            sql/17_create_billing_raw_table.sql \
+            sql/18_create_pipeline_watermark.sql \
+            sql/21_create_billing_core_table.sql \
+            sql/30_extend_pipeline_step_audit.sql \
+            sql/33_create_billing_quarantine.sql \
+            sql/35_add_billing_quarantine_resolution.sql
+          do
+            test -f "$file" || { echo "Missing setup file: $file"; exit 1; }
+            echo "Applying $file"
+            "${dc[@]}" exec -T postgres_test \
+              psql -U telco_test_user -d telco_test -v ON_ERROR_STOP=1 \
+              -f - < "$file"
+          done
+
+      - name: Run integration tests
+        run: python -m pytest integration_tests -v
+
+      - name: Show PostgreSQL logs if something fails
+        if: failure()
+        run: docker compose -p telco-integration-test -f compose.integration.yaml logs --no-color postgres_test
+
+      - name: Stop isolated PostgreSQL
+        if: always()
+        run: docker compose -p telco-integration-test -f compose.integration.yaml down

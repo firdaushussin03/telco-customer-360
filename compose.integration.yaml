@@ -1,0 +1,28 @@
+
+# ============================================================
+# TELCO CUSTOMER 360 - POSTGRESQL INTEGRATION TESTING
+# File: compose.integration.yaml
+#
+# Purpose:
+#   - Run a separate PostgreSQL instance for integration tests
+#   - Keep tests isolated from the existing project database
+# ============================================================
+
+services:
+
+  postgres_test:
+    image: postgres:17
+
+    environment:
+      POSTGRES_USER: telco_test_user
+      POSTGRES_PASSWORD: local_test_only
+      POSTGRES_DB: telco_test
+
+    ports:
+      - "127.0.0.1:5437:5432"
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telco_test_user -d telco_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

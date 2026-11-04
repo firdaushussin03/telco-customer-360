@@ -1,11 +1,11 @@
-import pandas as pd
-import re
 import os
-from pathlib import Path
+import re
+from decimal import Decimal, ROUND_HALF_UP
 from getpass import getpass
+from pathlib import Path
 
+import pandas as pd
 from sqlalchemy import URL, create_engine, text
-
 
 # ============================================================
 # TELCO CUSTOMER 360 - PIPELINE ORCHESTRATOR
@@ -17,35 +17,30 @@ from sqlalchemy import URL, create_engine, text
 #   - Transform and UPSERT billing data
 #   - Validate each layer
 #   - Record pipeline and step status in audit tables
+
 # ============================================================
-
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SQL_DIR = PROJECT_ROOT / "sql"
-
 BILLING_SOURCE_FILE = (
     PROJECT_ROOT
     / "data"
     / "raw"
     / "billing_transactions.csv"
 )
-
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = int(os.getenv("DB_PORT", "5432"))
 DB_NAME = os.getenv("DB_NAME", "telco_project")
 DB_USER = os.getenv("DB_USER", "postgres")
-
 PIPELINE_NAME = "telco_customer_360"
 BILLING_SOURCE_NAME = "billing_transactions"
 
-
 # ============================================================
 # DATABASE CONNECTION
+
 # ============================================================
 
 def get_engine():
     password = os.getenv("DB_PASSWORD") or getpass("PostgreSQL password: ")
-
     connection_url = URL.create(
         drivername="postgresql+psycopg2",
         username=DB_USER,
@@ -54,43 +49,35 @@ def get_engine():
         port=DB_PORT,
         database=DB_NAME,
     )
-
     return create_engine(connection_url)
-
 
 # ============================================================
 # SQL FILE EXECUTION
+
 # ============================================================
 
 def execute_sql_file(engine, filename):
     file_path = SQL_DIR / filename
-
     if not file_path.exists():
         raise FileNotFoundError(
             f"SQL file not found: {file_path}"
         )
-
     sql = file_path.read_text(encoding="utf-8")
     print(f"Executing SQL file: {file_path.resolve()}")
-
     connection = engine.raw_connection()
-
     try:
         with connection.cursor() as cursor:
             cursor.execute(sql)
-
         connection.commit()
-
     except Exception:
         connection.rollback()
         raise
-
     finally:
         connection.close()
 
-
 # ============================================================
 # QUERY HELPERS
+
 # ============================================================
 
 def get_scalar(engine, query):
@@ -99,13 +86,11 @@ def get_scalar(engine, query):
             text(query)
         ).scalar_one()
 
-
 def get_table_count(engine, full_table_name):
     return get_scalar(
         engine,
         f"SELECT COUNT(*) FROM {full_table_name}"
     )
-
 
 def assert_equal(actual, expected, message):
     if actual != expected:
@@ -113,18 +98,16 @@ def assert_equal(actual, expected, message):
             f"{message}. Expected {expected}, got {actual}."
         )
 
-
 def assert_zero(engine, query, message):
     result = get_scalar(engine, query)
-
     if result != 0:
         raise RuntimeError(
             f"{message}. Found {result} invalid rows."
         )
 
-
 # ============================================================
 # AUDIT FUNCTIONS
+
 # ============================================================
 
 def start_pipeline_run(engine):
@@ -139,13 +122,11 @@ def start_pipeline_run(engine):
         )
         RETURNING run_id;
     """)
-
     with engine.begin() as connection:
         return connection.execute(
             query,
             {"pipeline_name": PIPELINE_NAME},
         ).scalar_one()
-
 
 def finish_pipeline_run(
     engine,
@@ -161,7 +142,6 @@ def finish_pipeline_run(
             error_message = :error_message
         WHERE run_id = :run_id;
     """)
-
     with engine.begin() as connection:
         connection.execute(
             query,
@@ -171,7 +151,6 @@ def finish_pipeline_run(
                 "error_message": error_message,
             },
         )
-
 
 def start_pipeline_step(
     engine,
@@ -191,7 +170,6 @@ def start_pipeline_step(
         )
         RETURNING step_id;
     """)
-
     with engine.begin() as connection:
         return connection.execute(
             query,
@@ -200,7 +178,6 @@ def start_pipeline_step(
                 "step_name": step_name,
             },
         ).scalar_one()
-
 
 def finish_pipeline_step(
     engine,
@@ -226,7 +203,6 @@ def finish_pipeline_step(
             error_message = :error_message
         WHERE step_id = :step_id;
     """)
-
     with engine.begin() as connection:
         connection.execute(
             query,
@@ -241,9 +217,9 @@ def finish_pipeline_step(
             },
         )
 
-
 # ============================================================
 # BASE PIPELINE VALIDATION
+
 # ============================================================
 
 def validate_staging(engine):
@@ -254,7 +230,6 @@ def validate_staging(engine):
         ("raw.services", "staging.services"),
         ("raw.status", "staging.status"),
     ]
-
     for raw_table, staging_table in table_pairs:
         assert_equal(
             get_table_count(engine, staging_table),
@@ -262,7 +237,6 @@ def validate_staging(engine):
             f"Row-count mismatch: "
             f"{raw_table} -> {staging_table}",
         )
-
     assert_zero(
         engine,
         """
@@ -275,7 +249,6 @@ def validate_staging(engine):
         """,
         "Unexpected NULL in demographics Boolean columns",
     )
-
     assert_zero(
         engine,
         """
@@ -297,7 +270,6 @@ def validate_staging(engine):
         """,
         "Unexpected NULL in services Boolean columns",
     )
-
     assert_zero(
         engine,
         """
@@ -312,7 +284,6 @@ def validate_staging(engine):
         """,
         "Internet service business rule failed",
     )
-
     assert_zero(
         engine,
         """
@@ -326,7 +297,6 @@ def validate_staging(engine):
         "Churn mapping failed",
     )
 
-
 def validate_core(engine):
     table_pairs = [
         ("staging.demographics", "core.customer"),
@@ -335,7 +305,6 @@ def validate_core(engine):
         ("staging.services", "core.services"),
         ("staging.status", "core.customer_status"),
     ]
-
     for staging_table, core_table in table_pairs:
         assert_equal(
             get_table_count(engine, core_table),
@@ -343,7 +312,6 @@ def validate_core(engine):
             f"Row-count mismatch: "
             f"{staging_table} -> {core_table}",
         )
-
     assert_zero(
         engine,
         """
@@ -355,7 +323,6 @@ def validate_core(engine):
         """,
         "Orphan customer found in core.location",
     )
-
     assert_zero(
         engine,
         """
@@ -367,7 +334,6 @@ def validate_core(engine):
         """,
         "Orphan customer found in core.services",
     )
-
     assert_zero(
         engine,
         """
@@ -379,7 +345,6 @@ def validate_core(engine):
         """,
         "Orphan customer found in core.customer_status",
     )
-
     assert_zero(
         engine,
         """
@@ -392,9 +357,9 @@ def validate_core(engine):
         "Orphan ZIP code found in core.location",
     )
 
-
 # ============================================================
 # BILLING WATERMARK + INCREMENTAL RAW LOAD
+
 # ============================================================
 
 def get_billing_watermark(connection):
@@ -404,7 +369,6 @@ def get_billing_watermark(connection):
         WHERE pipeline_name = :pipeline_name
           AND source_name = :source_name;
     """)
-
     watermark = connection.execute(
         query,
         {
@@ -412,14 +376,11 @@ def get_billing_watermark(connection):
             "source_name": BILLING_SOURCE_NAME,
         },
     ).scalar_one_or_none()
-
     if watermark is None:
         raise RuntimeError(
             "Billing watermark record was not found."
         )
-
     return pd.Timestamp(watermark)
-
 
 def update_billing_watermark(
     connection,
@@ -433,7 +394,6 @@ def update_billing_watermark(
         WHERE pipeline_name = :pipeline_name
           AND source_name = :source_name;
     """)
-
     connection.execute(
         query,
         {
@@ -443,50 +403,42 @@ def update_billing_watermark(
             "source_name": BILLING_SOURCE_NAME,
         },
     )
-    
 
 # ============================================================
 # STRICT BILLING DATE VALIDATION
+
 # ============================================================
 
 def invalid_billing_date_mask(values):
-
     # Check the exact YYYY-MM-DD text format.
     date_text = values.astype("string")
-
     correct_format = date_text.str.fullmatch(
         r"\d{4}-\d{2}-\d{2}"
     ).fillna(False)
-
     # Check that the date actually exists.
     parsed_dates = pd.to_datetime(
         date_text,
         format="%Y-%m-%d",
         errors="coerce"
     )
-
     # Invalid when either check fails.
     return (~correct_format) | parsed_dates.isna()
 
-
 # ============================================================
 # QUARANTINE INVALID BILLING TIMESTAMPS
+
 # ============================================================
 
 def quarantine_invalid_billing_timestamps(billing, engine, source_file_name=None):
-
     # A missing column is handled by source validation.
     if "updated_at" not in billing.columns:
         return 0
-
     invalid_rows = billing.loc[
         invalid_billing_date_mask(billing["updated_at"])
     ].copy()
-
     if invalid_rows.empty:
         print("No invalid billing timestamps found.")
         return 0
-
     insert_sql = text("""
         INSERT INTO audit.billing_quarantine (
             bill_id,
@@ -513,13 +465,9 @@ def quarantine_invalid_billing_timestamps(billing, engine, source_file_name=None
                 AND status = 'OPEN'
             );
     """)
-
     inserted_count = 0
-
     with engine.begin() as connection:
-
         for index, row in invalid_rows.iterrows():
-
             parameters = {
                 "bill_id": (
                     None if pd.isna(row.get("bill_id"))
@@ -534,25 +482,21 @@ def quarantine_invalid_billing_timestamps(billing, engine, source_file_name=None
                 "raw_record": row.to_json(),
                 "rejection_reason": "Missing or invalid updated_at"
             }
-
             result = connection.execute(
                 insert_sql,
                 parameters
             )
-
             inserted_count += result.rowcount
-
     print(f"Invalid timestamp records: {len(invalid_rows)}")
     print(f"New records quarantined: {inserted_count}")
-
     return inserted_count
 
 # ============================================================
 # BILLING SOURCE VALIDATION
+
 # ============================================================
 
 def validate_billing_source(billing):
-
     # 1. Check required columns
     required_columns = [
         "bill_id",
@@ -560,16 +504,13 @@ def validate_billing_source(billing):
         "created_at",
         "updated_at",
     ]
-
     for column in required_columns:
         if column not in billing.columns:
             raise ValueError(
                 f"Missing required column: {column}"
             )
-
     # 2. Check missing bill IDs and customer IDs
     for column in ["bill_id", "customer_id"]:
-
         missing = (
             billing[column]
             .fillna("")
@@ -577,48 +518,158 @@ def validate_billing_source(billing):
             .str.strip()
             .eq("")
         )
-
         if missing.any():
             raise ValueError(
                 f"Missing {column}: {missing.sum()} rows"
             )
-
-    
-
     # 3. Validate source timestamps
     for column in ["created_at", "updated_at"]:
-
         invalid_mask = invalid_billing_date_mask(
             billing[column]
         )
-
         if invalid_mask.any():
             raise ValueError(
                 f"Missing, invalid, or non-ISO {column} values."
             )
-
         billing[column] = pd.to_datetime(
             billing[column],
             format="%Y-%m-%d",
             errors="raise"
         )
-
-
-
     # 4. Check timestamp order
     invalid_dates = (
         billing["updated_at"] < billing["created_at"]
     )
-
     if invalid_dates.any():
         raise ValueError(
             "Some billing records have updated_at "
             "earlier than created_at."
         )
-
     print("Billing source validation passed.")
-
     return billing
+# The source columns that describe a billing record (not ingestion metadata).
+# Only columns present in the incoming CSV are compared; our production
+# generated CSV contains all of them, while small tests may contain fewer.
+BILLING_SOURCE_COLUMNS = (
+    "bill_id", "customer_id", "billing_date",
+    "base_monthly_charge", "long_distance_charge", "extra_data_charge",
+    "discount_amount", "total_amount", "payment_method", "payment_status",
+    "created_at", "updated_at",
+)
+
+BILLING_MONEY_COLUMNS = {
+    "base_monthly_charge", "long_distance_charge", "extra_data_charge",
+    "discount_amount", "total_amount",
+}
+
+
+
+def normalize_billing_field(column, value):
+    """Compare CSV and PostgreSQL values without false type differences."""
+    if pd.isna(value):
+        return None
+
+    if column in {"created_at", "updated_at"}:
+        return pd.Timestamp(value).to_pydatetime()
+
+    if column == "billing_date":
+        return pd.Timestamp(value).date()
+
+    if column in BILLING_MONEY_COLUMNS:
+        return Decimal(str(value)).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+
+    return str(value)
+
+
+
+def select_unseen_billing_versions(billing, connection):
+    """
+    Keep only source versions not already in RAW.
+
+    A version is identified by (bill_id, updated_at) for this synthetic source.
+    Conflicting payloads with the same key are rejected, not silently skipped.
+    For a large production source, use a database staging table + indexed set
+    joins instead of this deliberately simple, chunked comparison.
+    """
+    unsupported = set(billing.columns) - set(BILLING_SOURCE_COLUMNS)
+    if unsupported:
+        raise ValueError(
+            f"Unexpected billing source columns: {sorted(unsupported)}"
+        )
+
+    source_columns = [
+        col for col in BILLING_SOURCE_COLUMNS if col in billing.columns
+    ]
+
+    # Track duplicate versions inside the same incoming CSV first.
+    # Key -> (payload, original row position).
+    candidate_versions = {}
+    for position, record in enumerate(billing.to_dict("records")):
+        key = (
+            str(record["bill_id"]),
+            pd.Timestamp(record["updated_at"]).to_pydatetime(),
+        )
+        payload = tuple(
+            normalize_billing_field(col, record[col])
+            for col in source_columns
+        )
+
+        if key in candidate_versions:
+            if candidate_versions[key][0] != payload:
+                raise ValueError(
+                    f"Conflicting source records for bill_id={key[0]}, "
+                    f"updated_at={key[1]}"
+                )
+            # Same source version appears twice in this file; load it once.
+            continue
+
+        candidate_versions[key] = (payload, position)
+
+    if not candidate_versions:
+        return billing.iloc[0:0].copy()
+
+    # Fetch matching bills from RAW in manageable ID chunks. All reads and
+    # the later insert use the SAME transaction connection.
+    ids = list(dict.fromkeys(key[0] for key in candidate_versions))
+    quoted_columns = ", ".join(f'"{col}"' for col in source_columns)
+    query = text(
+        f"SELECT {quoted_columns} FROM raw.billing_transactions "
+        "WHERE bill_id = ANY(:bill_ids) AND updated_at IS NOT NULL"
+    )
+
+    already_received = set()
+    for start in range(0, len(ids), 1000):
+        batch_ids = ids[start:start + 1000]
+        for raw_row in connection.execute(
+            query, {"bill_ids": batch_ids}
+        ).mappings():
+            key = (
+                str(raw_row["bill_id"]),
+                pd.Timestamp(raw_row["updated_at"]).to_pydatetime(),
+            )
+            if key not in candidate_versions:
+                continue
+
+            raw_payload = tuple(
+                normalize_billing_field(col, raw_row[col])
+                for col in source_columns
+            )
+            incoming_payload = candidate_versions[key][0]
+            if raw_payload != incoming_payload:
+                raise ValueError(
+                    f"Conflicting RAW version for bill_id={key[0]}, "
+                    f"updated_at={key[1]}; investigate source data"
+                )
+            already_received.add(key)
+
+    positions = [
+        position
+        for key, (_payload, position) in candidate_versions.items()
+        if key not in already_received
+    ]
+    return billing.iloc[positions].copy()
 
 
 
@@ -628,83 +679,72 @@ def load_billing_raw_incremental(engine, source_file = None):
         source_file = BILLING_SOURCE_FILE
     else:
         source_file = Path(source_file)
-
     if not source_file.exists():
         raise FileNotFoundError(
             f"Billing source file not found: {source_file}"
         )
-
     billing = pd.read_csv(source_file)
-
     source_row_count = len(billing)
-
     # Check that the updated_at column exists.
     if "updated_at" not in billing.columns:
         raise ValueError(
             "Missing required column: updated_at"
         )
-
     # Identify records with invalid timestamps.
     invalid_mask = invalid_billing_date_mask(
         billing["updated_at"]
     )
-
     invalid_count = int(invalid_mask.sum())
-
     # Save invalid records to the quarantine table.
     quarantine_invalid_billing_timestamps(
         billing,
         engine,
         source_file_name=source_file.name
     )
-
     # Keep only rows with valid updated_at.
     billing = billing.loc[
         ~invalid_mask
     ].copy()
-
     # Validate the remaining records.
     billing = validate_billing_source(billing)
-
     print(f"Billing source rows: {source_row_count}")
     print(f"Valid records: {len(billing)}")
     print(f"Quarantined records: {invalid_count}")
-
     if invalid_count > 0:
         print(
             "WARNING: Some billing records were quarantined "
             "and still require investigation."
         )
-
-
     with engine.begin() as connection:
+        # Serialize concurrent runs of this loader in this database.
+        # Other ingestion writers must use the same lock to coordinate.
+        connection.execute(
+            text("SELECT pg_advisory_xact_lock(782341, 1)")
+        )
+
         last_watermark = get_billing_watermark(
             connection
         )
-
         print(
             f"Billing current watermark: "
             f"{last_watermark}"
         )
-
-        incremental_rows = billing[
-            billing["updated_at"] > last_watermark
-        ].copy()
-
+        # Reconsider any source version we actually receive, including
+        # late-arriving bills older than the watermark. The helper checks
+        # the incoming CSV and existing RAW rows to avoid repeats.
+        incremental_rows = select_unseen_billing_versions(
+            billing, connection
+        )
         rows_loaded = len(incremental_rows)
-
         print(
-            "Billing new / changed rows found: "
+            "Billing unseen source versions found: "
             f"{rows_loaded}"
         )
-
         if incremental_rows.empty:
             return 0
-
         incremental_rows[
             "source_file_name"
         ] = source_file.name
-
         incremental_rows.to_sql(
             name="billing_transactions",
             con=connection,
@@ -714,66 +754,55 @@ def load_billing_raw_incremental(engine, source_file = None):
             chunksize=1000,
             method="multi",
         )
-
-        new_watermark = (
-            incremental_rows["updated_at"].max()
+        # A recovered historical bill must never move the watermark back.
+        new_watermark = max(
+            last_watermark,
+            pd.Timestamp(incremental_rows["updated_at"].max()),
         )
-
         update_billing_watermark(
             connection,
             new_watermark,
         )
-
         print(
             "Billing new watermark: "
             f"{new_watermark}"
         )
-
         return rows_loaded
-
 
 # ============================================================
 # COUNTED BILLING CORE UPSERT
+
 # ============================================================
 
 def upsert_billing_core_with_metrics(engine):
     """
     Classify STAGING bills against CORE and execute the existing
     22_upsert_billing_core.sql inside the SAME database transaction.
-
     Returns actual inserted/updated action counts, rather than the
     final total row count of core.billing_transactions.
-
     This function relies on the query produced in
     31_preview_billing_upsert_actions.sql.
     """
-
     preview_path = SQL_DIR / "31_preview_billing_upsert_actions.sql"
     upsert_path = SQL_DIR / "22_upsert_billing_core.sql"
-
     for path in [preview_path, upsert_path]:
         if not path.exists():
             raise FileNotFoundError(f"SQL file not found: {path}")
-
     preview_sql = preview_path.read_text(encoding="utf-8")
     upsert_sql = upsert_path.read_text(encoding="utf-8")
-
     # The manual SQL file includes BEGIN/COMMIT. Python controls a
     # single transaction for BOTH classification and UPSERT, so
     # remove the standalone wrappers in memory. The saved SQL
     # file remains unchanged for manual use.
     begin_pattern = r"(?im)^[ \t]*BEGIN[ \t]*;[ \t]*$"
     commit_pattern = r"(?im)^[ \t]*COMMIT[ \t]*;[ \t]*$"
-
     upsert_sql, begin_count = re.subn(begin_pattern, "", upsert_sql)
     upsert_sql, commit_count = re.subn(commit_pattern, "", upsert_sql)
-
     if begin_count != 1 or commit_count != 1:
         raise RuntimeError(
             "Expected exactly one standalone BEGIN; and COMMIT; "
             "in 22_upsert_billing_core.sql."
         )
-
     with engine.begin() as connection:
         # Serialize writers on CORE billing for the duration of
         # classification + UPSERT. Good for this local learning
@@ -782,40 +811,33 @@ def upsert_billing_core_with_metrics(engine):
             "LOCK TABLE core.billing_transactions "
             "IN SHARE ROW EXCLUSIVE MODE"
         )
-
         result = connection.exec_driver_sql(preview_sql)
         counts = dict(result.mappings().one())
-
         inserted = int(counts["rows_to_insert"])
         updated = int(counts["rows_to_update"])
         unchanged = int(counts["rows_unchanged"])
         invalid = int(counts["invalid_rows"])
         total = int(counts["staging_rows"])
-
         if invalid:
             raise RuntimeError(
                 f"Billing STAGING contains {invalid} invalid "
                 "bill_id / updated_at values."
             )
-
         if inserted + updated + unchanged != total:
             raise RuntimeError(
                 "Billing action categories do not add up "
                 "to STAGING row count."
             )
-
         # One INSERT...ON CONFLICT SQL statement. rowcount from
         # PostgreSQL counts actual inserted + updated rows.
         statement_result = connection.exec_driver_sql(upsert_sql)
         actual_changed = statement_result.rowcount
-
         if actual_changed != inserted + updated:
             raise RuntimeError(
                 "UPSERT affected a different number of rows "
                 f"than expected: expected {inserted + updated}, "
                 f"got {actual_changed}. Transaction rolled back."
             )
-
     # We only return metrics AFTER the UPSERT transaction commits.
     return {
         "rows_processed": actual_changed,
@@ -824,9 +846,9 @@ def upsert_billing_core_with_metrics(engine):
         "rows_unchanged": unchanged,
     }
 
-
 # ============================================================
 # BILLING STAGING VALIDATION (BEFORE CORE UPSERT)
+
 # ============================================================
 
 def validate_billing_staging(engine):
@@ -837,13 +859,11 @@ def validate_billing_staging(engine):
         "SELECT COUNT(DISTINCT bill_id) FROM raw.billing_transactions",
     )
     staging_rows = get_table_count(engine, "staging.billing_transactions")
-
     assert_equal(
         staging_rows,
         raw_unique_bills,
         "Billing STAGING count differs from unique RAW bill count",
     )
-
     assert_zero(
         engine,
         """
@@ -857,7 +877,6 @@ def validate_billing_staging(engine):
         """,
         "Duplicate bill IDs found in Billing STAGING",
     )
-
     assert_zero(
         engine,
         """
@@ -872,7 +891,6 @@ def validate_billing_staging(engine):
         """,
         "Outdated bill version found in Billing STAGING",
     )
-
     assert_zero(
         engine,
         """
@@ -888,7 +906,6 @@ def validate_billing_staging(engine):
         """,
         "RAW bill IDs missing from Billing STAGING",
     )
-
     assert_zero(
         engine,
         """
@@ -900,9 +917,9 @@ def validate_billing_staging(engine):
         "Missing billing IDs or updated_at values in STAGING",
     )
 
-
 # ============================================================
 # BILLING VALIDATION
+
 # ============================================================
 
 def validate_billing(engine):
@@ -913,31 +930,26 @@ def validate_billing(engine):
         FROM raw.billing_transactions;
         """,
     )
-
     staging_rows = get_table_count(
         engine,
         "staging.billing_transactions",
     )
-
     core_rows = get_table_count(
         engine,
         "core.billing_transactions",
     )
-
     assert_equal(
         staging_rows,
         raw_unique_bills,
         "Billing STAGING row count does not "
         "match distinct RAW bill count",
     )
-
     assert_equal(
         core_rows,
         staging_rows,
         "Billing CORE row count does not "
         "match STAGING row count",
     )
-
     assert_zero(
         engine,
         """
@@ -951,7 +963,6 @@ def validate_billing(engine):
         """,
         "Duplicate bill_id found in billing STAGING",
     )
-
     assert_zero(
         engine,
         """
@@ -966,7 +977,6 @@ def validate_billing(engine):
         """,
         "Outdated bill version found in STAGING",
     )
-
     assert_zero(
         engine,
         """
@@ -978,7 +988,6 @@ def validate_billing(engine):
         """,
         "Billing bill missing from CORE",
     )
-
     assert_zero(
         engine,
         """
@@ -990,7 +999,6 @@ def validate_billing(engine):
         """,
         "Outdated bill version found in CORE",
     )
-
     assert_zero(
         engine,
         """
@@ -1002,7 +1010,6 @@ def validate_billing(engine):
         """,
         "Orphan billing customer found in CORE",
     )
-
     assert_zero(
         engine,
         """
@@ -1016,7 +1023,6 @@ def validate_billing(engine):
         """,
         "Invalid billing payment status found",
     )
-
     assert_zero(
         engine,
         """
@@ -1030,7 +1036,6 @@ def validate_billing(engine):
         """,
         "Negative billing amount found",
     )
-
     assert_zero(
         engine,
         """
@@ -1041,9 +1046,9 @@ def validate_billing(engine):
         "Invalid billing source timestamp found",
     )
 
-
 # ============================================================
 # MART VALIDATION
+
 # ============================================================
 
 def validate_mart(engine):
@@ -1059,7 +1064,6 @@ def validate_mart(engine):
         "mart.customer_360 row count does not "
         "match core.customer",
     )
-
     assert_zero(
         engine,
         """
@@ -1074,7 +1078,6 @@ def validate_mart(engine):
         "Duplicate customers found in "
         "mart.customer_360",
     )
-
     assert_zero(
         engine,
         """
@@ -1088,9 +1091,9 @@ def validate_mart(engine):
         "mart.customer_360",
     )
 
-
 # ============================================================
 # ADDITIONAL MART VALIDATION
+
 # ============================================================
 
 def validate_billing_summary_mart(engine):
@@ -1105,7 +1108,6 @@ def validate_billing_summary_mart(engine):
         unique_billed_customers,
         "Billing summary customer count mismatch",
     )
-
     assert_zero(
         engine,
         """
@@ -1119,7 +1121,6 @@ def validate_billing_summary_mart(engine):
         """,
         "Duplicate customers in billing summary",
     )
-
     assert_zero(
         engine,
         """
@@ -1130,7 +1131,6 @@ def validate_billing_summary_mart(engine):
         """,
         "Billing summary payment counts do not reconcile",
     )
-
     core_count = get_table_count(engine, "core.billing_transactions")
     mart_count = get_scalar(
         engine,
@@ -1138,7 +1138,6 @@ def validate_billing_summary_mart(engine):
         "FROM mart.customer_billing_summary"
     )
     assert_equal(mart_count, core_count, "Billing summary bill count mismatch")
-
     assert_zero(
         engine,
         """
@@ -1152,14 +1151,12 @@ def validate_billing_summary_mart(engine):
         "Billing summary total amount mismatch",
     )
 
-
 def validate_enriched_customer_360_mart(engine):
     assert_equal(
         get_table_count(engine, "mart.customer_360_enriched"),
         get_table_count(engine, "core.customer"),
         "Enriched customer count mismatch",
     )
-
     assert_zero(
         engine,
         """
@@ -1173,7 +1170,6 @@ def validate_enriched_customer_360_mart(engine):
         """,
         "Duplicate customers in enriched mart",
     )
-
     assert_zero(
         engine,
         """
@@ -1185,7 +1181,6 @@ def validate_enriched_customer_360_mart(engine):
         """,
         "Missing CORE customers in enriched mart",
     )
-
     assert_zero(
         engine,
         """
@@ -1196,7 +1191,6 @@ def validate_enriched_customer_360_mart(engine):
         """,
         "Enriched mart payment counts do not reconcile",
     )
-
     assert_zero(
         engine,
         """
@@ -1221,9 +1215,9 @@ def validate_enriched_customer_360_mart(engine):
         "Enriched mart billing metrics differ from billing summary",
     )
 
-
 # ============================================================
 # PIPELINE STEP WRAPPER
+
 # ============================================================
 
 def run_step(
@@ -1234,27 +1228,21 @@ def run_step(
     rows_processed_function=None,
 ):
     print(f"\n{step_name}...")
-
     step_id = start_pipeline_step(
         engine,
         run_id,
         step_name,
     )
-
     try:
         result = action()
-
         rows_processed = None
-
         if rows_processed_function is not None:
             rows_processed = rows_processed_function(
                 result
             )
-
         # Only the counted billing UPSERT returns this metrics
         # dictionary; other steps keep their existing behavior.
         metrics = result if isinstance(result, dict) else {}
-
         finish_pipeline_step(
             engine,
             step_id,
@@ -1264,18 +1252,14 @@ def run_step(
             rows_updated=metrics.get("rows_updated"),
             rows_unchanged=metrics.get("rows_unchanged"),
         )
-
         if metrics:
             print(
                 f"Inserted: {metrics['rows_inserted']} | "
                 f"Updated: {metrics['rows_updated']} | "
                 f"Unchanged: {metrics['rows_unchanged']}"
             )
-
         print("SUCCESS")
-
         return result
-
     except Exception as error:
         finish_pipeline_step(
             engine,
@@ -1283,30 +1267,24 @@ def run_step(
             "FAILED",
             error_message=str(error),
         )
-
         print("FAILED")
         raise
 
-
 # ============================================================
 # MAIN PIPELINE
+
 # ============================================================
 
 def main():
     engine = get_engine()
-
     with engine.connect() as connection:
         connection.execute(text("SELECT 1"))
-
     print("Database connection successful.")
-
     run_id = start_pipeline_run(engine)
-
     print("\n" + "=" * 60)
     print("TELCO CUSTOMER 360 PIPELINE")
     print(f"Run ID: {run_id}")
     print("=" * 60)
-
     try:
         run_step(
             engine,
@@ -1327,14 +1305,12 @@ def main():
                 ]
             ),
         )
-
         run_step(
             engine,
             run_id,
             "2. Validate Base STAGING",
             lambda: validate_staging(engine),
         )
-
         run_step(
             engine,
             run_id,
@@ -1354,14 +1330,12 @@ def main():
                 ]
             ),
         )
-
         run_step(
             engine,
             run_id,
             "4. Validate Base CORE",
             lambda: validate_core(engine),
         )
-
         run_step(
             engine,
             run_id,
@@ -1371,7 +1345,6 @@ def main():
             ),
             lambda rows_loaded: rows_loaded,
         )
-
         run_step(
             engine,
             run_id,
@@ -1385,14 +1358,12 @@ def main():
                 "staging.billing_transactions",
             ),
         )
-
         run_step(
             engine,
             run_id,
             "7. Validate Billing STAGING",
             lambda: validate_billing_staging(engine),
         )
-
         run_step(
             engine,
             run_id,
@@ -1400,14 +1371,12 @@ def main():
             lambda: upsert_billing_core_with_metrics(engine),
             lambda metrics: metrics["rows_processed"],
         )
-
         run_step(
             engine,
             run_id,
             "9. Validate Billing Pipeline",
             lambda: validate_billing(engine),
         )
-
         run_step(
             engine,
             run_id,
@@ -1421,14 +1390,12 @@ def main():
                 "mart.customer_360",
             ),
         )
-
         run_step(
             engine,
             run_id,
             "11. Validate Customer 360 MART",
             lambda: validate_mart(engine),
         )
-
         run_step(
             engine,
             run_id,
@@ -1440,14 +1407,12 @@ def main():
                 engine, "mart.customer_billing_summary"
             ),
         )
-
         run_step(
             engine,
             run_id,
             "13. Validate Billing Summary MART",
             lambda: validate_billing_summary_mart(engine),
         )
-
         run_step(
             engine,
             run_id,
@@ -1459,25 +1424,21 @@ def main():
                 engine, "mart.customer_360_enriched"
             ),
         )
-
         run_step(
             engine,
             run_id,
             "15. Validate Enriched Customer 360 MART",
             lambda: validate_enriched_customer_360_mart(engine),
         )
-
         finish_pipeline_run(
             engine,
             run_id,
             "SUCCESS",
         )
-
         print("\n" + "=" * 60)
         print("PIPELINE COMPLETED SUCCESSFULLY")
         print(f"Run ID: {run_id}")
         print("=" * 60)
-
     except Exception as error:
         finish_pipeline_run(
             engine,
@@ -1485,15 +1446,11 @@ def main():
             "FAILED",
             error_message=str(error),
         )
-
         print("\n" + "=" * 60)
         print("PIPELINE FAILED")
         print(f"Run ID: {run_id}")
         print(f"Error: {error}")
         print("=" * 60)
-
         raise
-
-
 if __name__ == "__main__":
     main()
