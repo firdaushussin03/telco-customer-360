@@ -286,6 +286,14 @@ def test_incremental_load_no_new_records(tmp_path, monkeypatch):
         fake_watermark,
     )
 
+    # Simulate that all incoming billing versions already exist in RAW.
+    # Therefore, no new versions should be ingested.
+    monkeypatch.setattr(
+        pipeline,
+        "select_unseen_billing_versions",
+        lambda incoming, connection: incoming.iloc[0:0].copy(),
+    )
+
     # 4. Replace database-writing operations with mocks.
     fake_insert = MagicMock()
 
@@ -360,6 +368,16 @@ def test_incremental_load_new_records(tmp_path, monkeypatch):
         pipeline,
         "get_billing_watermark",
         fake_watermark,
+    )
+
+    # Simulate B001 and B002 already existing in RAW.
+    # Only B003 and B004 are unseen versions.
+    monkeypatch.setattr(
+        pipeline,
+        "select_unseen_billing_versions",
+        lambda incoming, connection: incoming.loc[
+            incoming["bill_id"].isin(["B003", "B004"])
+        ].copy(),
     )
 
     # 4. Capture the records passed to to_sql().
