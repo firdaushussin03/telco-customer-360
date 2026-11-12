@@ -1,0 +1,193 @@
+
+name: telco-airflow
+
+services:
+
+  # Service 1: Airflow Metadata Database
+  airflow-db:
+    image: postgres:17
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${AIRFLOW_METADATA_DB_PASSWORD:?Set Airflow database password}
+      POSTGRES_DB: airflow_metadata
+
+    volumes:
+      - airflow_metadata_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow_metadata"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Service 2: Initialize Airflow Metadata Tables
+  airflow-init:
+    image: apache/airflow:3.3.2
+
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_METADATA_DB_PASSWORD}@airflow-db:5432/airflow_metadata
+
+    command: ["airflow", "db", "migrate"]
+
+  # Service 3: Discover and Parse DAG Files
+  airflow-dag-processor:
+    image: apache/airflow:3.3.2
+
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_METADATA_DB_PASSWORD}@airflow-db:5432/airflow_metadata
+
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+
+    command: ["airflow", "dag-processor"]
+
+    
+  # Service 4: Airflow API Server and Web UI
+  airflow-api-server:
+    image: apache/airflow:3.3.2
+
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: "admin:admin"
+
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_METADATA_DB_PASSWORD}@airflow-db:5432/airflow_metadata
+
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?Set Airflow JWT secret}
+
+    ports:
+      - "127.0.0.1:8080:8080"
+
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+    command: ["airflow", "api-server"]
+
+    volumes:
+      - ./airflow/logs:/opt/airflow/logs
+
+    
+  # Service 5: Schedule and Execute Airflow Tasks
+  airflow-scheduler:
+    image: telco-airflow-custom:3.3.2
+
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-api-server:
+        condition: service_healthy
+
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__PARALLELISM: "2"
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_METADATA_DB_PASSWORD}@airflow-db:5432/airflow_metadata
+
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?Set Airflow JWT secret}
+
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+
+      # Telco development warehouse connection
+      DB_HOST: telco-warehouse-dev
+      DB_PORT: "5432"
+      DB_NAME: telco_airflow_dev
+      DB_USER: telco_dev_user
+      DB_PASSWORD: ${TELCO_AIRFLOW_DEV_DB_PASSWORD:?Set development database password}
+
+    volumes:
+      # Airflow DAG definitions
+      - ./airflow/dags:/opt/airflow/dags:ro
+
+      # Airflow task logs
+      - ./airflow/logs:/opt/airflow/logs
+
+      # Telco ETL Python scripts
+      - ./src:/app/src:ro
+
+      # Telco SQL scripts
+      - ./sql:/app/sql:ro
+
+      # Telco source data
+      - ./data/raw:/app/data/raw:ro
+
+    command: ["airflow", "scheduler"]
+
+  # Service 6: PostgreSQL container
+  telco-warehouse-dev:
+    image: postgres:17
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: telco_dev_user
+      POSTGRES_PASSWORD: ${TELCO_AIRFLOW_DEV_DB_PASSWORD:?Set development database password}
+      POSTGRES_DB: telco_airflow_dev
+
+    volumes:
+      - telco_airflow_dev_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telco_dev_user -d telco_airflow_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Service 7: ETL Service
+  telco-etl-dev:
+    profiles:
+      - etl-dev
+
+    image: telco-customer-360-etl-dev:local
+
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    depends_on:
+      telco-warehouse-dev:
+        condition: service_healthy
+
+    environment:
+      DB_HOST: telco-warehouse-dev
+      DB_PORT: "5432"
+      DB_NAME: telco_airflow_dev
+      DB_USER: telco_dev_user
+      DB_PASSWORD: ${TELCO_AIRFLOW_DEV_DB_PASSWORD:?Set development database password}
+
+    volumes:
+      - ./data/raw:/app/data/raw:ro 
+
+    command: ["python", "--version"]
+
+volumes:
+  airflow_metadata_data:
+  telco_airflow_dev_data:
