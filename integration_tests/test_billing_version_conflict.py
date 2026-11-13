@@ -66,7 +66,7 @@ def test_conflicting_versions_in_same_csv_are_rejected(tmp_path):
 
         try:
             # 3. Import the same production file used by other tests.
-            pipeline_file = PROJECT_ROOT / 'src' / '15_run_pipeline.py'
+            pipeline_file = PROJECT_ROOT / 'src' / 'telco_pipeline.py'
             spec = importlib.util.spec_from_file_location(
                 'telco_pipeline_version_conflict', pipeline_file
             )

@@ -15,7 +15,7 @@ import pytest
 SCRIPT_PATH = (
     Path(__file__).resolve().parents[1]
     / "src"
-    / "15_run_pipeline.py"
+    / "telco_pipeline.py"
 )
 
 # Import file 15 without executing main().

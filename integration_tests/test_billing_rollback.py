@@ -66,7 +66,7 @@ def test_billing_ingestion_rolls_back_on_failure(tmp_path, monkeypatch):
             assert original_bill_count == 0
 
         # 3. Import the REAL production pipeline.
-        pipeline_file = PROJECT_ROOT / "src" / "15_run_pipeline.py"
+        pipeline_file = PROJECT_ROOT / "src" / "telco_pipeline.py"
 
         spec = importlib.util.spec_from_file_location(
             "telco_pipeline_rollback_test",

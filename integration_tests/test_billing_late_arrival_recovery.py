@@ -73,7 +73,7 @@ def test_late_arriving_bill_is_recovered_without_moving_watermark(tmp_path):
 
         try:
             # 3. Import the actual production pipeline.
-            pipeline_file = PROJECT_ROOT / "src" / "15_run_pipeline.py"
+            pipeline_file = PROJECT_ROOT / "src" / "telco_pipeline.py"
 
             spec = importlib.util.spec_from_file_location(
                 "telco_pipeline_late_arrival",

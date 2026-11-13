@@ -121,7 +121,7 @@ def test_billing_ingestion_skips_old_and_equal_records(tmp_path):
                 )
 
             # 4. Import the REAL production pipeline.
-            pipeline_file = PROJECT_ROOT / "src" / "15_run_pipeline.py"
+            pipeline_file = PROJECT_ROOT / "src" / "telco_pipeline.py"
 
             spec = importlib.util.spec_from_file_location(
                 "telco_pipeline_no_new_rows",
