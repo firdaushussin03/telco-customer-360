@@ -1,6 +1,6 @@
 # Telco Customer 360 — End-to-End Data Engineering Pipeline
 
-A local, end-to-end **data engineering portfolio project** that combines IBM Telco customer and churn data with synthetic billing transactions. It implements a PostgreSQL analytical warehouse, incremental ingestion and UPSERTs, data quality checks, audit trails, Dockerized execution, **Apache Airflow orchestration**, and automated testing with **pytest and GitHub Actions**.
+A local, end-to-end **data engineering portfolio project** that combines IBM Telco customer and churn data with synthetic billing transactions. It implements a PostgreSQL analytical warehouse, incremental ingestion and UPSERTs, data quality checks, audit trails, Dockerized execution, **Apache Airflow orchestration**, automated testing with **pytest and GitHub Actions**, and **Continuous Delivery to GitHub Container Registry (GHCR)**.
 
 ## At a glance
 
@@ -8,8 +8,9 @@ A local, end-to-end **data engineering portfolio project** that combines IBM Tel
 - **Warehouse:** PostgreSQL `raw` → `staging` → `core` → `mart` plus `audit`.
 - **Orchestration:** Airflow 3.3.2, **15 individual ETL tasks + start/finalize (17 tasks)**.
 - **Reliability:** source validations, quarantine, incremental version detection, UPSERT, audit/watermark tracking.
-- **Verification:** 18 unit tests, 11 PostgreSQL integration tests, GitHub Actions checks passing, successful Airflow run.
-- **Deployments:** standalone local Docker pipeline and an isolated Airflow development stack; **no cloud deployment**.
+- **Verification:** 18 unit tests, 11 PostgreSQL integration tests, GitHub Actions CI checks passing, successful Airflow run.
+- **Continuous Delivery:** CI-gated ETL Docker image publishing to GitHub Container Registry (GHCR).
+- **Deployments:** standalone local Docker pipeline and an isolated Airflow development stack; **no automated cloud deployment**.
 
 ## Project Overview
 
@@ -30,6 +31,7 @@ The repository supports two ways to run the same 15-step ETL logic: a **standalo
 - Record pipeline runs and step-level execution outcomes for traceability.
 - Orchestrate and observe individual ETL steps using Apache Airflow.
 - Automatically validate the code with unit tests, isolated PostgreSQL integration tests, and GitHub Actions.
+- Build and publish a versioned ETL container image to GHCR after successful CI on `main`.
 
 ## Technology Stack
 
@@ -43,10 +45,11 @@ The repository supports two ways to run the same 15-step ETL logic: a **standalo
 | Docker and Docker Compose | Containerization, PostgreSQL healthchecks, database bootstrap, and isolated test/Airflow environments |
 | Apache Airflow 3.3.2 | TaskFlow DAGs, dependencies, LocalExecutor, and ETL monitoring |
 | pytest | Unit tests and PostgreSQL-backed integration tests |
-| Git and GitHub Actions | Version control, pull requests, and CI verification |
+| Git and GitHub Actions | Version control, pull requests, automated CI, and the CD workflow |
+| GitHub Container Registry (GHCR) | Stores the built and versioned ETL application Docker images |
 | pgAdmin 4 (optional) | Inspecting PostgreSQL schemas, data, and audit records |
 
-**Current scope:** A **local batch-processing** data platform with two orchestration paths (standalone Python or Airflow). The Airflow DAG is manually triggered (`schedule=None`); recurring scheduling, cloud deployment, Spark, Kafka, and dbt are **not** implemented in this project.
+**Current scope:** A **local batch-processing** data platform with two orchestration paths (standalone Python or Airflow), automated CI, and **Continuous Delivery of the ETL Docker image**. The Airflow DAG is manually triggered (`schedule=None`); recurring scheduling, automatic deployment of a running environment, Spark, Kafka, and dbt are **not** implemented in this project.
 
 ## Datasets
 
@@ -388,11 +391,61 @@ The integration database must also contain the required fixture schemas/tables a
 | Airflow development warehouse | `telco_airflow_dev` | `127.0.0.1:5438` -> container `5432` (when published) |
 | Airflow metadata database | Separate Airflow internal database | Docker internal network only |
 
+## Continuous Delivery — Docker Image Publishing
+
+The project also includes a **Continuous Delivery (CD)** workflow at `.github/workflows/publish-etl-image.yml`. Unlike the CI workflow, which verifies code behavior, the CD workflow packages the tested ETL application as a Docker image and publishes it to **GitHub Container Registry (GHCR)**. This is **image delivery**, not deployment of a running Airflow/PostgreSQL environment.
+
+### CI-to-CD workflow
+
+```mermaid
+flowchart TD
+    A["Push changes to main"] --> B["GitHub Actions: Pytest CI"]
+    B --> C{"CI completed successfully?"}
+    C -->|No| D["Do not publish an image"]
+    C -->|Yes| E["Docker CD workflow_run event"]
+    E --> F["Checkout the exact successful CI commit"]
+    F --> G["Build ETL image from Dockerfile"]
+    G --> H["Authenticate with GITHUB_TOKEN"]
+    H --> I["Push latest and SHA-tagged images to GHCR"]
+```
+
+The workflow responds to completion of `Telco Customer 360 - Pytest CI` and publishes only when the triggering CI run succeeded **and** originated from a `push` on `main` in this repository. It uses the CI run's `head_sha` to build the tested commit, Docker Buildx for image building, and the built-in GitHub Actions `GITHUB_TOKEN` with `packages: write` permission.
+
+### Image names and verification
+
+The workflow publishes the **ETL application image** built with the repository's `Dockerfile` under these tags:
+
+```text
+ghcr.io/firdaushussin03/telco-customer-360:latest
+ghcr.io/firdaushussin03/telco-customer-360:sha-<full-git-commit-sha>
+```
+
+The `latest` tag identifies the latest successfully published image, while `sha-...` identifies the source commit. The container package may initially be private; public pulling requires adjusting visibility under the GitHub package settings. The workflow does **not** build or publish the separate `Dockerfile.airflow` image.
+
+**Recorded verification:** GitHub Actions showed **Docker CD workflow run #1 completed successfully**. To independently confirm the expected image was actually published, open the successful job's `Build and publish ETL Docker image` step and check the repository owner's **Packages** page for the `telco-customer-360` container package. Once visibility and permissions permit, the image can be retrieved with:
+
+```cmd
+docker pull ghcr.io/firdaushussin03/telco-customer-360:latest
+```
+
+Pulling the image demonstrates registry distribution; it does not by itself test the application with database credentials, source files, or a configured runtime. The published image does not contain the local IBM datasets or `.env` secrets; those must be supplied by the environment that runs it.
+
+### CI versus CD versus deployment
+
+| Stage | Status | What it proves |
+|---|---|---|
+| Continuous Integration (CI) | Implemented | Automated unit and isolated PostgreSQL integration checks can pass |
+| Continuous Delivery (CD) | Implemented; first workflow run successful | A tested commit can be built and published as a versioned ETL container image |
+| Continuous Deployment | Not implemented | No automatic rollout to a running cloud server, Airflow scheduler, or production database |
+
+The local Docker Compose and Airflow environments still run independently. Publishing a new ETL image does **not** automatically update the currently running containers, which use their own image-build/bind-mount configuration.
+
 ## Repository Structure
 
 ```text
 telco-customer-360/
-├── .github/workflows/pytest.yml  # GitHub Actions unit + integration jobs
+├── .github/workflows/pytest.yml             # GitHub Actions CI: unit + integration jobs
+├── .github/workflows/publish-etl-image.yml  # GHCR image Continuous Delivery
 ├── airflow/dags/                 # Three Airflow DAGs
 │   ├── telco_airflow_learning.py
 │   ├── telco_customer_360_pipeline.py
@@ -684,17 +737,19 @@ The commands above assume `POSTGRES_USER=postgres` and `POSTGRES_DB=telco_projec
 - Bootstrap and Excel ingestion run in separate transactions, and partial initialization needs investigation rather than automatic destructive cleanup.
 - The project relies on the IBM Telco sample files and a synthetic billing CSV supplied or prepared locally; Docker Compose does not automatically obtain the source datasets.
 - Airflow provides **task-level orchestration**, but the Phase 2 DAG has `schedule=None` and is triggered manually. Recurring schedules, alerting, remote workers, and failure recovery beyond the implemented audit finalization are not production-hardened.
+- CD publishes the ETL Docker image only; it does **not** deploy running services, migrate a production database, or publish the separate Airflow image.
 
 ## Future Improvements
 
 - Add a recurring Airflow schedule, failure alerts, and more robust recovery/cleanup of interrupted audit runs.
 - Expand initialization checks to validate essential data types, constraints, source data contents, and a reliable completion marker.
 - Introduce monitoring, secret management, and stronger concurrency controls for production-style deployments.
+- Consider container image vulnerability scanning and a controlled staging deployment/rollback process if the project is later hosted.
 - Evaluate **dbt Core** for modular SQL models, documentation, and testing.
 - Explore managed cloud storage/warehousing and distributed processing in a **separate project**, rather than adding every tool to this learning repository.
 
 ## Project Status
 
-**Current status: Complete local batch-pipeline implementation and Airflow orchestration validated.** The local PostgreSQL pipeline (Run 27) and standalone Docker runs successfully completed their 15 steps. The separate Airflow development warehouse recorded **Run ID 6: SUCCESS, 15 successful audit steps, 0 failed**, and Airflow displayed **17/17 task successes**. Local pytest results were **18 unit tests + 11 PostgreSQL integration tests passed**. GitHub Actions showed **4/4 successful checks** on PR #7.
+**Current status: Complete local batch-pipeline implementation, Airflow orchestration, CI, and ETL image Continuous Delivery validated.** The local PostgreSQL pipeline (Run 27) and standalone Docker runs successfully completed their 15 steps. The separate Airflow development warehouse recorded **Run ID 6: SUCCESS, 15 successful audit steps, 0 failed**, and Airflow displayed **17/17 task successes**. Local pytest results were **18 unit tests + 11 PostgreSQL integration tests passed**. GitHub Actions showed **4/4 successful checks** on PR #7. The separate **Docker CD workflow run #1** also completed successfully after CI.
 
-The Airflow implementation and test-import adjustments were merged into `main` via **PR #7**, merge commit `a20bef3`. This repository is a tested **local batch data engineering portfolio project**, not a production deployment. Source files, local credentials, initial database bootstrapping, and Docker prerequisites remain necessary; streaming ingestion, autonomous repair, scheduled Airflow runs, and managed cloud infrastructure are outside the current scope.
+The Airflow implementation and test-import adjustments were merged into `main` via **PR #7**, merge commit `a20bef3`. This repository is a tested **local batch data engineering portfolio project with CI and GHCR image delivery**, not a production deployment. Source files, local credentials, initial database bootstrapping, and Docker prerequisites remain necessary; streaming ingestion, autonomous repair, scheduled Airflow runs, and managed cloud infrastructure are outside the current scope.
