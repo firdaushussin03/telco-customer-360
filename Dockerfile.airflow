@@ -1,0 +1,13 @@
+
+# ============================================================
+# TELCO CUSTOMER 360 - CUSTOM APACHE AIRFLOW IMAGE
+# ============================================================
+
+# 1. Start from our existing Airflow version
+FROM apache/airflow:3.3.2
+
+# 2. Install the missing Excel dependency
+#    Keep Apache Airflow pinned to version 3.3.2
+RUN pip install --no-cache-dir \
+    "apache-airflow==3.3.2" \
+    "openpyxl==3.1.5"

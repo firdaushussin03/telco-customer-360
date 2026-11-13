@@ -82,7 +82,7 @@ def test_invalid_timestamp_is_quarantined(tmp_path):
             assert original_quarantine_count == 0
 
         # 3. Import the real production pipeline.
-        pipeline_file = PROJECT_ROOT / "src" / "15_run_pipeline.py"
+        pipeline_file = PROJECT_ROOT / "src" / "telco_pipeline.py"
 
         spec = importlib.util.spec_from_file_location(
             "telco_pipeline_quarantine_test",

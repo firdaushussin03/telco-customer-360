@@ -66,7 +66,7 @@ def test_successful_billing_ingestion_commits_both(tmp_path):
             assert existing_bill_count == 0
 
         # 4. Import the actual production pipeline module.
-        pipeline_file = PROJECT_ROOT / "src" / "15_run_pipeline.py"
+        pipeline_file = PROJECT_ROOT / "src" / "telco_pipeline.py"
 
         spec = importlib.util.spec_from_file_location(
             "telco_pipeline_integration",
