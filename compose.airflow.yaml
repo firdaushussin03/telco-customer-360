@@ -151,6 +151,9 @@ services:
       POSTGRES_USER: telco_dev_user
       POSTGRES_PASSWORD: ${TELCO_AIRFLOW_DEV_DB_PASSWORD:?Set development database password}
       POSTGRES_DB: telco_airflow_dev
+    
+    ports:
+      - "127.0.0.1:5438:5432"
 
     volumes:
       - telco_airflow_dev_data:/var/lib/postgresql/data
